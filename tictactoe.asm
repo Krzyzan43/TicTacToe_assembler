@@ -16,14 +16,35 @@ mov.s $f12, %r
 syscall
 .end_macro
 
+.macro printInt (%r)
+li $v0, 1
+move $a0, %r
+syscall
+.end_macro
+
+.macro printCharAdr (%r)
+li $v0, 11
+lb $a0, (%r)
+syscall
+.end_macro
+
+.macro printCharLbl (%r)
+li $v0, 11
+lb $a0, %r
+syscall
+.end_macro
+
 .macro beginFunc
-addi $sp, $sp, -4
-sw $ra, ($sp)
+sw $fp, -4($sp)
+sw $ra, -8($sp)
+addi $sp, $sp, -8
+move $fp, $sp
 .end_macro
 
 .macro return
-lw $ra, ($sp)
-addi $sp, $sp, 4
+la $sp, 8($fp)
+lw $ra, ($fp)
+lw $fp, 4($fp)
 jr $ra
 .end_macro
 
@@ -45,293 +66,574 @@ syscall
 addi $v0, $v0, -48
 .end_macro
 
+.macro exit
+li $v0, 10
+syscall
+.end_macro
+
 .data
-	input: .space 51
-	endl: .asciiz "\n"
-	askOperation: .asciiz "\nWybierz dzialanie: \n1. dodawanie \n2. odejmowanie \n3. mnozenie \n4. dzielenie \n"
-	invalidOperationMsg: .asciiz "\nNieprawidlowy wybor\n"
-	invalidFloatMsg: .asciiz "\nPodano nieprawidlowa liczbe\n"
-	div0ErrorMsg: .asciiz "\nBlad dzielenia przez 0\n"
-	askAMsg: .asciiz "\nPodaj a: "
-	askBMsg: .asciiz "\nPodaj b: "
-	resultMsg: .asciiz "\nWynik: "
-	continueMsg: .asciiz "\nCzy kontynuwac? (nie - 0, tak - 1): "
-	wrongChoice: .asciiz "\nNieprawidlowy wybor"
+	askNoRoundsMsg: .asciiz "\nWybierz liczbe rund (1-5): \n"
+	badNoRoundsMsg: .asciiz "\nNieprawidlowy wybor\n"
+
+	askCharacterMsg: .asciiz "\nWybierz swoj znak (kolko - 0, krzyzyk 1): "
+	badCharacterMsg: .asciiz "\nNieprawidlowy wybor\n"
 	
-	tenth: .float 0.1
-	ten: .float 10
-	one: .float 1
-	zero: .float 0
+	computerWinsMsg: .asciiz "\nLiczba wygranych komputera: "
+	playerWinsMsg: .asciiz "\nLiczba wygranych gracza: "
+	
+	askFieldMsg: .asciiz "\nPodaj pole (1-9): "
+	badFieldMsg: .asciiz "\nNieprawidlowe pole\n"
+	
+	aiWon: .asciiz "\Komputer wygral\n"
+	playerWon: .asciiz "\nGracz wygral\n"
+	draw: .asciiz "\nRemis\n"
+	
+	endl: .byte 10
+
+	player: .byte 88
+	ai: .byte 79
+	blank: .byte 46 
+
+	lines: .byte -1 -2 -3, -4 -5 -6, -7 -8 -9, -1 -4 -7, -2 -5 -8, -3 -6 -9, -1 -5 -9, -7 -5 -3
 .text
+	#s0 - number of rounds
+	#s1 - player wins
+	#s2 - computer wins
+	#s3 - address of the board
 	main:
-		jal getOperation
-		move $a0, $v0
-		jal executeOperation
-		jal askToContinue
+		move $fp, $sp
+		move $s3, $fp
+		move $a0, $fp
+		jal setupBoard
+		addi $sp, $sp, -12
 		
-		bnez $v0, main
 		
-		endExecution:
-		li $v0, 10
-		syscall
+		jal getNoRounds
+		playRounds:
+			beqz $s0, endGame
+			jal getPlayerCharacter
+			jal executeRound
+			addi $s0, $s0, -1
+			j playRounds
+			
+		endGame:
+			jal printResult
+			exit
+
 		
-	getOperation:
-		#v0 - operation to be made
-		#loops until user types correct operation
-		print (askOperation)
+		exit
+		
+	getNoRounds:
+		print (askNoRoundsMsg)
 		readDigit
-		blez $v0, invalidOperation
-		bgt $v0, 4, invalidOperation
-		move $t0, $v0
-		print (endl)
-		move $v0, $t0
+		blez $v0, badNoRounds
+		bgt $v0, 5, badNoRounds
+		
+		move $s0, $v0
 		jr $ra
 		
-		invalidOperation:
-			print (invalidOperationMsg)
-			j getOperation
-		
-	executeOperation:
-		beginFunc
-		#a0 - operation to execute
-		move $s0, $a0
-		
-		la $a0, askAMsg
-		jal readFloat
-		mov.s $f12, $f0
-		
-		la $a0, askBMsg
-		jal readFloat
-		mov.s $f13, $f0
-		
-		beq $s0, 1, executeAdd
-		beq $s0, 2, executeSub
-		beq $s0, 3, executeMul
-		beq $s0, 4, executeDiv
-		
-		printOpResult:
-		print (resultMsg)
-		printFloat ($f12)
-		
-		endExecuteOperation:
-			return
-		
-		executeAdd:
-		add.s $f12, $f12, $f13
-		j printOpResult
+		badNoRounds:
+			print (badNoRoundsMsg)
+			j getNoRounds
 	
-		executeSub:
-		sub.s $f12, $f12, $f13
-		j printOpResult
-	
-		executeMul:
-		mul.s $f12, $f12, $f13
-		j printOpResult
-	
-		executeDiv:
-		l.s $f0, zero
-		c.eq.s $f0, $f13
-		bc1t div0Error
-		
-		div.s $f12, $f12, $f13
-		j printOpResult
-		
-		div0Error:
-		print (div0ErrorMsg)
-		j endExecuteOperation
-		
-	askToContinue:
-		print (continueMsg)
+	getPlayerCharacter:
+		print (askCharacterMsg)
 		readDigit
-		bltz $v0, invalidDigit
-		bgt $v0, 2, invalidDigit
-		jr $ra
+		beqz $v0, playerCircle
+		beq $v0, 1, playerCross
+		print (badCharacterMsg)
+		j getPlayerCharacter
 		
-		invalidDigit:
-			print (wrongChoice)
-			j askToContinue
-		
-	readFloat:
-		#a0 - message to display
-		beginFunc
-		move $t8, $a0
-		
-		tryRead:
-			printAddress ($t8)
-			readString (input, 51)
-			jal parseFloat
-			bnez $v0, invalidFloat
-			return
-			
-		invalidFloat:
-			print (invalidFloatMsg)
-			j tryRead
-		
-	parseFloat:
-		addi $sp, $sp, -4
-		sw $ra, ($sp)
-	
-		la $t0, input   #t0 - pointer to character in string
-		li $t1, 0 	 	#t1 - character index
-		li $t2, 0		#t2 - current character
-		
-		li $t3, 0		#t3 - number of characters before dot
-		li $t4, 0		#t4 - number of characters after the dot
-		li $v0, 0		#v0 - error code (0-good)
-		
-		parseCharacter:
-			lb $t2, ($t0)
-			beq $t2, 10, wrongParse
-			beqz $t2, wrongParse
-			bne $t2, 45, parseBeforeComa
-			
-			addi $t0, $t0, 1
-		
-			parseBeforeComa:
-			lb $t2, ($t0)
-			beqz $t2, endParse		# character is null (string terminated)
-			beq $t2, 10, endParse	# character is endl
-			
-			beq $t2, 44, handleComa
-			beq $t2, 46, handleComa
-			
-			blt $t2, 48, wrongParse
-			bgt $t2, 57, wrongParse
-			
-			addi $t0, $t0, 1
-			addi $t3, $t3, 1
-			j parseBeforeComa
-			
-			
-			handleComa:
-			addi $t0, $t0, 1
-			j parseAfterComa
-				
-				
-			parseAfterComa:
-			lb $t2, ($t0)
-			beqz $t2, endParse		# character is null (string terminated)
-			beq $t2, 10, endParse	# character is endl
-				
-			blt $t2, 48, wrongParse
-			bgt $t2, 57, wrongParse
-			
-			addi $t0, $t0, 1
-			addi $t4, $t4, 1
-			j parseAfterComa
-			
-			wrongParse:
-			li $v0, 1
-			j exitFunc
-			
-			endParse:
-			li $v0, 0
-			move $a0, $t3
-			move $a1, $t4
-			jal calculateFloat
-			
-			j exitFunc
-			
-			exitFunc:
-			lw $ra, ($sp)
-			addi $sp, $sp, 4
+		playerCircle:
+			li $v0, 79
+			sb $v0, player
+			li $v0, 88
+			sb $v0, ai
 			jr $ra
+			
+		playerCross:
+			li $v0, 79
+			sb $v0, ai
+			li $v0, 88
+			sb $v0, player
+			jr $ra
+	
+	printResult:
+		print (playerWinsMsg)
+		printInt ($s1)
+		print (computerWinsMsg)
+		printInt ($s2)
+		jr $ra
 		
-	calculateFloat:
+	#Actual Round section -----------------
+	executeRound:
+		beginFunc
+		
+		move $a0, $s3
+		jal setupBoard
+		
+		makePlayerMove:
+			move $a0, $s3
+			jal askPlayerMove
+			add $t0, $s3, $v0
+			lb $t1, player
+			sb $t1, ($t0)
+			
+			move $a0, $s3
+			jal drawBoard
+			
+			move $a0, $s3
+			jal getGameState
+			beqz $v0, makeComputerMove
+			j endRound
+			
+		
+		makeComputerMove:
+			move $a0, $s3
+			jal getBestAiMove
+			add $t0, $s3, $v0
+			lb $t1, ai
+			sb $t1, ($t0)
+			
+			move $a0, $s3
+			jal drawBoard
+			
+			move $a0, $s3
+			jal getGameState
+			beqz $v0, makePlayerMove
+			j endRound
+		
+		
+		endRound:
+			seq $t0, $v0, 1
+			seq $t1, $v0, 2
+			add $s1, $s1, $t0
+			add $s2, $s2, $t1
+			
+			bne $t0, 1, skipPlayerWinMsg
+			print (playerWon)
+			skipPlayerWinMsg:
+			
+			bne $t1, 1, skipAiWinMsg
+			print (aiWon)
+			skipAiWinMsg:
+			
+			or $t0, $t0, $t1
+			bne $t0, 0, skipDrawMsg
+			print(draw)
+			skipDrawMsg:
+			
+			return
+		
+	
+		
+	askPlayerMove:
+		#a0 - address of first cell
+		#v0 - no chosen cell [-1, -9]
+		move $t0, $a0
+		
+		askMove:
+			printCharLbl (endl)
+			print(askFieldMsg)
+			readDigit
+			blez $v0, badMoveAsked
+			bgt $v0, 9, badMoveAsked
+			
+			neg $v0, $v0
+			add $t1, $t0, $v0
+			lb $t2, blank
+			lb $t1, ($t1)
+			bne $t2, $t1, badMoveAsked
+			
+			move $t0, $v0
+			printCharLbl(endl)
+			move $v0, $t0
+			jr $ra
+			
+		badMoveAsked:
+			print(badFieldMsg)
+			j askMove
+		
+		
+		
+	
+	setupBoard:
+		#a0 - address of first cell
+		lb $t0, blank #inital cell state
+		lb $t1, player
+		lb $t2, ai
+		
+		sb $t0, -1($a0)
+		sb $t0, -2($a0)
+		sb $t0, -3($a0)
+		sb $t0, -4($a0)
+		sb $t0, -5($a0)
+		sb $t0, -6($a0)
+		sb $t0, -7($a0)
+		sb $t0, -8($a0)
+		sb $t0, -9($a0)
+		jr $ra
+		
+	copyBoard:
+		#a0 - address of first board
+		#a1 - address of new board
+		#saves registers
 		addi $sp, $sp, -4
-		sw $ra, ($sp)
+		sw $t0, ($sp)
 		
-		move $t0, $a0 # no digits before dot
-		move $t1, $a1 # no digits after dot
-		la $t2, input # pointer to string
-		l.s $f11, zero
+		lb $t0, -1($a0)
+		sb $t0, -1($a1)
 		
-		lb $a0, ($t2)
-		seq $t3, $a0, 45
-		add $t2, $t2, $t3
+		lb $t0, -2($a0)
+		sb $t0, -2($a1)
 		
-		addi $t0, $t0, -1 # loop counter (exponent) (reverse loop)
-		calculateBeforeComa:
-		bltz $t0, endCalculateBeforeComa
-			
-		lb $a0, ($t2)
-		addi $a0, $a0, -48
-		move $a1, $t0
-		jal powerTen
-		add.s $f11, $f11, $f2
-			
-		addi $t0, $t0, -1
-		addi $t2, $t2, 1
-		j calculateBeforeComa
+		lb $t0, -3($a0)
+		sb $t0, -3($a1)
 		
+		lb $t0, -4($a0)
+		sb $t0, -4($a1)
 		
-		endCalculateBeforeComa:
-		addi $t2, $t2, 1	# character pointer
-		li $t0, -1			# current exponent
+		lb $t0, -5($a0)
+		sb $t0, -5($a1)
 		
+		lb $t0, -6($a0)
+		sb $t0, -6($a1)
 		
-		calculateAfterComa:
-		beqz $t1, endCalculateAfterComa
-			
-		lb $a0, ($t2)
-		addi $a0, $a0, -48
-		move $a1, $t0
-		jal powerTen
-		add.s $f11, $f11, $f2
-			
-		addi $t1, $t1, -1
-		addi $t0, $t0, -1
-		addi $t2, $t2, 1
-		j calculateAfterComa
+		lb $t0, -7($a0)
+		sb $t0, -7($a1)
 		
+		lb $t0, -8($a0)
+		sb $t0, -8($a1)
 		
-		endCalculateAfterComa:
-		mov.s $f0, $f11
-		beqz $t3, skipNegate
-		neg.s $f0, $f0
-		skipNegate:
+		lb $t0, -9($a0)
+		sb $t0, -9($a1)
 		
-		lw $ra, ($sp)
+		lw $t0, ($sp)
 		addi $sp, $sp, 4
 		jr $ra
 		
+	
+	drawBoard:
+		#a0 - address of first cell
 		
-	powerTen: # a * 10^n 
-		#a0 - a
-		#a1 - n
-		#f2 - result
-		# uses no temp integer registers
+		sw $t0, -4($sp)
+		sw $a0, -8($sp)
+		move $t0, $a0
 		
-		sw $a0, -32($sp)	# move a to stack
-		l.s $f8, -32($sp) 	# read from stack to f8
-		cvt.s.w $f8, $f8 	# convert from int to float
+		#row 1
+		addi $t0, $t0, -1
+		printCharAdr ($t0)
+		addi $t0, $t0, -1
+		printCharAdr ($t0)
+		addi $t0, $t0, -1
+		printCharAdr ($t0)
+		printCharLbl (endl)
 		
-		l.s $f9, one
-		l.s $f10, ten		#save base in f10
+		#row 2
+		addi $t0, $t0, -1
+		printCharAdr ($t0)
+		addi $t0, $t0, -1
+		printCharAdr ($t0)
+		addi $t0, $t0, -1
+		printCharAdr ($t0)
+		printCharLbl (endl)
 		
-		bgez $a1, skipReverseTen # convert from 10^-n to 0.1^n	
-		l.s $f10, tenth
-		neg $a1, $a1
-		skipReverseTen:
+		#row 3
+		addi $t0, $t0, -1
+		printCharAdr ($t0)
+		addi $t0, $t0, -1
+		printCharAdr ($t0)
+		addi $t0, $t0, -1
+		printCharAdr ($t0)
+		printCharLbl (endl)
+		printCharLbl (endl)
 		
-		# current memory layout:
-		# $f8 - a
-		# $f9 - 1 (current exponent)
-		# $f10 - 10 or 0.1
-		increaseExponent:
-			beqz $a1, endPower
-			mul.s $f9, $f9, $f10
-			addi $a1, $a1, -1
-			j increaseExponent
-		
-		endPower:
-			mul.s $f2, $f8, $f9
-			jr $ra
-			
-	printEndl:
-		
-		li $v0, 4
-		la $a0, endl
-		syscall
-		
+		lw $t0, -4($sp)
+		lw $a0, -8($sp)
 		jr $ra
+	
+	getGameState:
+		#uses t0, t1, t2
+		#a0 - address of first cell
+		#v0 - state (0 - game continues, 1-player wins, 2-ai wins, 3-draw)
+		beginFunc
+		# first horizontal row
+		lb $t0, -1($a0)
+		lb $t1, -2($a0)
+		lb $t2, -3($a0)
+		jal checkForWin
+		bnez $v0, returnStateWin
+		
+		# second horizontal row
+		lb $t0, -4($a0)
+		lb $t1, -5($a0)
+		lb $t2, -6($a0)
+		jal checkForWin
+		bnez $v0, returnStateWin
+		
+		# third horizontal row
+		lb $t0, -7($a0)
+		lb $t1, -8($a0)
+		lb $t2, -9($a0)
+		jal checkForWin
+		bnez $v0, returnStateWin
+		
+		# first vertical row
+		lb $t0, -1($a0)
+		lb $t1, -4($a0)
+		lb $t2, -7($a0)
+		jal checkForWin
+		bnez $v0, returnStateWin
+		
+		# second vertical row
+		lb $t0, -2($a0)
+		lb $t1, -5($a0)
+		lb $t2, -8($a0)
+		jal checkForWin
+		bnez $v0, returnStateWin
+		
+		# third vertical row
+		lb $t0, -3($a0)
+		lb $t1, -6($a0)
+		lb $t2, -9($a0)
+		jal checkForWin
+		bnez $v0, returnStateWin
+		
+		# rising diagonal
+		lb $t0, -7($a0)
+		lb $t1, -5($a0)
+		lb $t2, -3($a0)
+		jal checkForWin
+		bnez $v0, returnStateWin
+		
+		# declining diagonal
+		lb $t0, -1($a0)
+		lb $t1, -5($a0)
+		lb $t2, -9($a0)
+		jal checkForWin
+		bnez $v0, returnStateWin
+		
+		j checkForDraw
+		
+		checkForWin:
+			#checks registers
+			seq $t0, $t0, $t1
+			seq $t1, $t1, $t2
+			and $t0, $t0, $t1
+			beqz $t0, noWin
+			lb $t1, player
+			beq $t1, $t2, playerWin
+			lb $t1, ai
+			beq $t1, $t2, aiWin
+			
+			noWin:
+				li $v0, 0
+				jr $ra
+			
+			playerWin:
+				li $v0, 1
+				jr $ra
+			aiWin:
+				li $v0, 2
+				jr $ra
+				
+		returnStateWin:
+			return
+			
+		checkForDraw:
+		li $t0, 0
+		checkNextCellDraw:
+			addi $t0, $t0, -1
+			beq $t0, -10, returnGameDraws
+			li $t1, 0
+			add $t1, $a0, $t0
+			lb $t2, ($t1)
+			lb $t1, blank
+			beq $t2, $t1, returnGameContinues
+			j checkNextCellDraw
+			
+		returnGameDraws:
+			li $v0, 3
+			return
+			
+		returnGameContinues:
+			li $v0, 0
+			return
+
+
+	testRandomGames:
+		move $fp, $sp
+		addi $sp, $sp, -12
+		
+		li $s2, 30 #number of rounds
+		
+		randomRound:
+			move $a0, $fp
+			jal setupBoard
+			
+			li $s0, 0	#game state
+			li $s1, 88	#88 - player move, 79-computer move
+			
+			doAction:
+				move $a0, $fp
+				jal getRandomMove
+				
+				move $t0, $fp
+				add $t0, $t0, $v0   #pointer to cell
+				sb $s1, ($t0)		#make move
+				
+				beq $s1, 88, makeAiTurn
+				j makePlayerTurn
+				
+				makePlayerTurn:
+				li $s1, 88
+				j skipMakeTurn
+				makeAiTurn:
+				li $s1, 79
+				j skipMakeTurn
+				
+				skipMakeTurn:
+				move $a0, $fp
+				jal getGameState
+				move $s0, $v0
+				bnez $s0, endTestRound
+				j doAction
+				
+			endTestRound:
+				move $a0, $fp
+				jal drawBoard
+				printInt($s0)
+				printCharLbl (endl)
+				printCharLbl (endl)
+				
+				addi $s2, $s2, -1
+				bnez $s2, randomRound
+				
+				exit
+		exit
+		
+	getBestAiMove:
+		#a0 - address of the board
+		#v0 - selected move [-1, -9]
+		beginFunc
+		move $t0, $a0	# pointer to start of the board
+		li $t1, 0		# current line (always divisible by 3)
+		lb $t7, ai
+		
+		checkWinMoveLoop:
+			beq $t1, 24, endCheckWinMoveLoop
+			
+			lb $t2, lines($t1) 	# t2 - cell number
+			add $t2, $t2, $t0		# t2 - cell address
+			lb $t2, ($t2)			# t2 - char under cell address
+			
+			lb $t3, lines + 1($t1) 	# t3 - cell number
+			add $t3, $t3, $t0		# t3 - cell address
+			lb $t3, ($t3)			# t3 - char under cell address
+			
+			lb $t4, lines + 2($t1) 	# t4 - cell number
+			add $t4, $t4, $t0		# t4 - cell address
+			lb $t4, ($t4)			# t4 - char under cell address
+			
+			seq $t5, $t2, $t7		# t5 - 1 cell is ai
+			seq $t6, $t3, $t7		# t6 - 2 cell is ai
+			and $t5, $t5, $t6		# t5 - 1 and 2 cell is ai
+			seq $t6, $t4, 46		# t6 - 3 cell is blank
+			and $t5, $t5, $t6		# t5 - 1,2=ai, 3=blank
+			lb $v0, lines + 2($t1)	# load 3rd cell to return address
+			bnez $t5, returnMove	# return if t5 is true
+			
+			seq $t5, $t2, $t7		# t5 - 1 cell is ai
+			seq $t6, $t4, $t7		# t6 - 3 cell is ai
+			and $t5, $t5, $t6		# t5 - 1 and 3 cell is ai
+			seq $t6, $t3, 46		# t6 - 2 cell is blank
+			and $t5, $t5, $t6		# t5 - 1,3=ai, 2=blank
+			lb $v0, lines + 1($t1)	# load 2rd cell to return address
+			bnez $t5, returnMove	# return if t5 is true
+			
+			seq $t5, $t4, $t7		# t5 - 3 cell is ai
+			seq $t6, $t3, $t7		# t6 - 2 cell is ai
+			and $t5, $t5, $t6		# t5 - 3 and 2 cell is ai
+			seq $t6, $t2, 46		# t6 - 1 cell is blank
+			and $t5, $t5, $t6		# t5 - 3,2=ai, 1=blank
+			lb $v0, lines($t1)	# load 1rd cell to return address
+			bnez $t5, returnMove	# return if t5 is true
+			
+			addi $t1, $t1, 3
+			j checkWinMoveLoop
+
+		
+		endCheckWinMoveLoop:
+		li $t1, 0		# current line (always divisible by 3)
+		lb $t7, player
+		checkBlockMoveLoop:
+			beq $t1, 24, goRandomMove
+			
+			lb $t2, lines($t1) 	# t2 - cell number
+			add $t2, $t2, $t0		# t2 - cell address
+			lb $t2, ($t2)			# t2 - char under cell address
+			
+			lb $t3, lines + 1($t1) 	# t3 - cell number
+			add $t3, $t3, $t0		# t3 - cell address
+			lb $t3, ($t3)			# t3 - char under cell address
+			
+			lb $t4, lines + 2($t1) 	# t4 - cell number
+			add $t4, $t4, $t0		# t4 - cell address
+			lb $t4, ($t4)			# t4 - char under cell address
+			
+			seq $t5, $t2, $t7		# t5 - 1 cell is player
+			seq $t6, $t3, $t7		# t6 - 2 cell is player
+			and $t5, $t5, $t6		# t5 - 1 and 2 cell is player
+			seq $t6, $t4, 46		# t6 - 3 cell is blank
+			and $t5, $t5, $t6		# t5 - 1,2=ai, 3=blank
+			lb $v0, lines + 2($t1)	# load 3rd cell to return address
+			bnez $t5, returnMove	# return if t5 is true
+			
+			seq $t5, $t2, $t7		# t5 - 1 cell is player
+			seq $t6, $t4, $t7		# t6 - 3 cell is player
+			and $t5, $t5, $t6		# t5 - 1 and 3 cell is player
+			seq $t6, $t3, 46		# t6 - 2 cell is blank
+			and $t5, $t5, $t6		# t5 - 1,3=ai, 2=blank
+			lb $v0, lines + 1($t1)	# load 2rd cell to return address
+			bnez $t5, returnMove	# return if t5 is true
+			
+			seq $t5, $t4, $t7		# t5 - 3 cell is player
+			seq $t6, $t3, $t7		# t6 - 2 cell is player
+			and $t5, $t5, $t6		# t5 - 3 and 2 cell is player
+			seq $t6, $t2, 46		# t6 - 1 cell is blank
+			and $t5, $t5, $t6		# t5 - 3,2=ai, 1=blank
+			lb $v0, lines($t1)	# load 1rd cell to return address
+			bnez $t5, returnMove	# return if t5 is true
+			
+			addi $t1, $t1, 3
+			j checkBlockMoveLoop
+			
+		goRandomMove:
+		jal getRandomMove
+		return
+		
+		returnMove:
+			return
+		
+	
+	getRandomMove:
+		#v0 - number of cell to make the move
+		#a0 - adress of first cell
+		move $v1, $a0
+		getRandomMoveLoop:
+			li $a0, 0
+			li $a1, 9
+			li $v0, 42
+			syscall
+			
+			neg $a0, $a0		#[0, 8] range to [-8, 0]
+			addi $a0, $a0, -1   #[-8, 0] range to [-9, -1]
+			
+			add $a1, $a0, $v1	#make $a1 memory pointer
+			lb $a2, blank		#make $a2 blank char
+			lb $v0, ($a1)		#load cell to v0
+			bne $a2, $v0, getRandomMoveLoop
+			
+		returnRandomMove:
+			move $v0, $a0
+			jr $ra
